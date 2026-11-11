@@ -1,0 +1,41 @@
+# =====================================================================
+# docker-compose.yml  (EMA-MRI integration project)
+#
+#   EMA_Research 以下を /workspace にマウントして実行する(shuushiの
+#   docker-compose.ymlと同じ規約)。さらにHDD(/mnt/fe6766e3-...)も
+#   同じ絶対パスでマウントし、Dataset等のシンボリックリンク先を
+#   コンテナ内からも解決できるようにする。
+#
+#   使い方:
+#     cd EMA_MRI_Research/docker
+#     docker compose build          # イメージをビルド
+#     docker compose up -d dev      # 永続コンテナを起動
+#     docker compose exec dev bash  # コンテナ内bashに入る
+# =====================================================================
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ema-mri-integration
+    container_name: ema-mri-integration-dev
+    working_dir: /workspace
+    volumes:
+      # EMA_Research以下をすべて/workspaceにマウント(docker-compose.ymlから2階層上)
+      - ../..:/workspace
+      # HDD上のデータセット(Dataset, Research/research/Dataset等のシンボリックリンク先)
+      - /mnt/fe6766e3-16c8-4ef5-ad41-61dce44e7ae3:/mnt/fe6766e3-16c8-4ef5-ad41-61dce44e7ae3
+      # ホスト側のClaude Code認証情報を引き継ぐ
+      - ${HOME}/.claude:/root/.claude
+      - ${HOME}/.claude.json:/root/.claude.json
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    shm_size: "8gb"
+    stdin_open: true
+    tty: true
+    command: /bin/bash

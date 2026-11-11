@@ -1,0 +1,64 @@
+# =====================================================================
+# requirements.txt (EMA-MRI integration project)
+#   shuushi(EMAモデル) / mri-to-speech-pytorch・Research(MRIモデル) / 統合層
+#   それぞれの依存を統合。torch/torchaudio はベースイメージ付属のCUDA版を使う。
+# =====================================================================
+
+# ---- Core scientific stack ----
+numpy<2.0
+scipy
+pandas
+matplotlib
+seaborn
+japanize-matplotlib
+scikit-learn
+scikit-image
+statsmodels
+tqdm
+pyyaml
+numba
+
+# ---- Audio / speech signal processing ----
+librosa
+soundfile
+soxr
+pyworld
+pysptk
+nnmnkwii
+pyopenjtalk
+torchmetrics
+pesq
+
+# ---- Speech recognition / evaluation / alignment ----
+SpeechRecognition
+pocketsphinx
+jiwer
+python-Levenshtein
+fastdtw
+
+# ---- Video / image ----
+opencv-python
+moviepy
+imageio
+imageio-ffmpeg
+pillow
+
+# ---- Japanese / English text processing ----
+jaconv
+unidecode
+inflect
+g2p_en
+
+# ---- mri-to-speech-pytorch (MRI model) ----
+timm
+adabelief-pytorch
+
+# ---- TensorFlow (shuushiのkeras.preprocessing.sequence.pad_sequencesでのみ使用) ----
+# cuDNNの衝突回避のためCPU版に固定(詳細はDocker_test/requirements.txtのコメント参照)
+tensorflow-cpu==2.21.0
+tensorboard>=2.15,<2.17
+
+# ---- Jupyter ----
+jupyter
+notebook
+ipykernel

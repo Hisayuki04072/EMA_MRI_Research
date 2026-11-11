@@ -1,0 +1,10 @@
+# 外部プロジェクトのコピー・大容量データ(別リポジトリ、またはサイズが大きいため追跡しない)
+/shuushi/
+/Research/
+/research-baseline/
+/mri-to-speech/
+/mri-to-speech-pytorch/
+
+# Python
+__pycache__/
+*.pyc

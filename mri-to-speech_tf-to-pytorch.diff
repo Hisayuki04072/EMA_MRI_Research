@@ -1,0 +1,627 @@
+diff --git a/README.md b/README.md
+index b00d51d..22bb8b0 100644
+--- a/README.md
++++ b/README.md
+@@ -7,7 +7,7 @@ Visit our [demo website](https://y-otn.github.io/mri-to-speech-demo/) to listen
+ ## Requirements
+ 
+ 1. NVIDIA GPU with NVIDIA Driver and Docker
+-2. TensorFlow NGC Container ~= nvcr.io/nvidia/tensorflow:23.02-tf2-py3
++2. PyTorch NGC Container ~= nvcr.io/nvidia/pytorch:23.02-py3
+ 
+ ## Setup
+ 
+diff --git a/dataset.py b/dataset.py
+index c00c595..f9889e6 100644
+--- a/dataset.py
++++ b/dataset.py
+@@ -2,12 +2,12 @@ import glob
+ import itertools
+ import math
+ import os
++import pickle
+ import random
+ 
+ import librosa
+ import numpy as np
+ import soxr
+-import tensorflow as tf
+ 
+ from utils.wav_io import read_wav
+ 
+@@ -66,14 +66,12 @@ def fix_wavs_mris(wavs, mris):
+ 
+ 
+ def write_dataset(wavs, mris, temp_dir_path, filename):
+-    with tf.io.TFRecordWriter(os.path.join(temp_dir_path, f'{filename}.tfrecord')) as writer:
+-        for wav, mri in itertools.zip_longest(wavs, mris):
+-            assert wav[0] == mri[0], 'Alignment error'
+-            example = tf.train.Example(features=tf.train.Features(feature={
+-                'n': tf.train.Feature(bytes_list=tf.train.BytesList(value=[wav[0].encode()])),
+-                'p': tf.train.Feature(int64_list=tf.train.Int64List(value=[mri[1], mri[2], wav[1]]))
+-            }))
+-            writer.write(example.SerializeToString())
++    records = []
++    for wav, mri in itertools.zip_longest(wavs, mris):
++        assert wav[0] == mri[0], 'Alignment error'
++        records.append((wav[0], mri[1], mri[2], wav[1]))
++    with open(os.path.join(temp_dir_path, f'{filename}.pkl'), 'wb') as file:
++        pickle.dump(records, file, pickle.HIGHEST_PROTOCOL)
+ 
+ 
+ def save_dataset(wav_dir, mri_dir, temp_dir_path, file_names, random_state,
+@@ -120,14 +118,9 @@ def format_ds(ds):
+ 
+ 
+ def write_dataset_f0(ds, temp_dir_path, filename):
+-    with tf.io.TFRecordWriter(os.path.join(temp_dir_path, f'{filename}.tfrecord')) as writer:
+-        for fn, nf, f0 in ds:
+-            example = tf.train.Example(features=tf.train.Features(feature={
+-                'n': tf.train.Feature(bytes_list=tf.train.BytesList(value=[fn.encode()])),
+-                'p': tf.train.Feature(int64_list=tf.train.Int64List(value=[nf])),
+-                'f': tf.train.Feature(float_list=tf.train.FloatList(value=[f0]))
+-            }))
+-            writer.write(example.SerializeToString())
++    records = [(fn, nf, f0) for fn, nf, f0 in ds]
++    with open(os.path.join(temp_dir_path, f'{filename}.pkl'), 'wb') as file:
++        pickle.dump(records, file, pickle.HIGHEST_PROTOCOL)
+ 
+ 
+ def save_dataset_f0(f0_dir, temp_dir_path, file_names, random_state):
+diff --git a/inference.py b/inference.py
+index ec99cce..96c0ecc 100644
+--- a/inference.py
++++ b/inference.py
+@@ -4,15 +4,28 @@ import os
+ import librosa
+ import numpy as np
+ import soxr
+-import tensorflow as tf
++import torch
+ from PIL import Image
+ 
+ from utils.wav_io import read_wav, write_wav
+ 
++_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
++
++
++def _predict(model, x, batch_size):
++    model.to(_device)
++    model.eval()
++    preds = []
++    with torch.no_grad():
++        for i in range(0, len(x), batch_size):
++            batch = torch.from_numpy(x[i:i + batch_size]).to(_device)
++            preds.append(model(batch).cpu().numpy())
++    return np.concatenate(preds)
++
+ 
+ def load_mri(mri_dir, file_name, ref_frames):
+     mri_paths = sorted(glob.glob(os.path.join(mri_dir, file_name, '*.png')))
+-    mris = [np.array(Image.open(mri_path))[..., None].astype(np.float32) / 65535.0 * 255.0 for mri_path in mri_paths]
++    mris = [np.array(Image.open(mri_path))[None].astype(np.float32) / 65535.0 * 255.0 for mri_path in mri_paths]
+     return np.stack([mris[i:i + ref_frames] for i in range(len(mris) - ref_frames + 1)])
+ 
+ 
+@@ -25,9 +38,7 @@ def save_audio(model, scaler, mri_dir, py_dir_path, file_names,
+     wavs = []
+     for file_name in file_names:
+         mris = load_mri(mri_dir, file_name, ref_frames)
+-        with tf.device('/CPU:0'):
+-            ds_test = tf.data.Dataset.from_tensor_slices(mris).batch(batch_size)
+-        spec = librosa.db_to_power((model.predict(ds_test, verbose=1) * scaler[1] + scaler[0]).T)
++        spec = librosa.db_to_power((_predict(model, mris, batch_size) * scaler[1] + scaler[0]).T)
+         np.save(os.path.join(spec_dir_path, file_name + '_gen.npy'), spec)
+         wave = soxr.resample(librosa.effects.deemphasis(librosa.feature.inverse.mel_to_audio(
+             spec, sr=rate_t, n_fft=n_fft, hop_length=hop_length, center=False, n_iter=n_iter), coef=coef),
+@@ -48,9 +59,7 @@ def write_filenames(path, file_names):
+ def save_pred_spec(model, scaler, ampl, mri_dir, dir_path, file_names, ref_frames, batch_size):
+     for file_name in file_names:
+         mris = load_mri(mri_dir, file_name, ref_frames)
+-        with tf.device('/CPU:0'):
+-            ds_test = tf.data.Dataset.from_tensor_slices(mris).batch(batch_size)
+-        spec = librosa.db_to_power((model.predict(ds_test, verbose=1) * scaler[1] + scaler[0]).T).clip(0.0)
++        spec = librosa.db_to_power((_predict(model, mris, batch_size) * scaler[1] + scaler[0]).T).clip(0.0)
+         if ampl:
+             spec = np.sqrt(spec)
+         np.save(os.path.join(dir_path, file_name + '.npy'), spec)
+@@ -92,7 +101,7 @@ def load_mri_f0(f0_dir, mri_dir, file_name, mri_height, mri_width, mri_channels)
+     nf = np.load(os.path.join(f0_dir, file_name + '.WAV_nf.npy'))
+     base_path = os.path.join(mri_dir, file_name, file_name)
+     mris = [np.array(Image.open(base_path + f'_{nf_:04}.png')).reshape(
+-        (mri_height, mri_width, mri_channels)).astype(np.float32) / 65535.0 * 255.0 for nf_ in nf]
++        (mri_height, mri_width, mri_channels)).transpose(2, 0, 1).astype(np.float32) / 65535.0 * 255.0 for nf_ in nf]
+     return np.stack(mris)
+ 
+ 
+@@ -102,7 +111,5 @@ def test_model_f0(model, scaler, f0_dir, mri_dir, py_dir_path, file_names,
+     os.makedirs(out_dir_path, exist_ok=True)
+     for file_name in file_names:
+         mris = load_mri_f0(f0_dir, mri_dir, file_name, mri_height, mri_width, mri_channels)
+-        with tf.device('/CPU:0'):
+-            ds_test = tf.data.Dataset.from_tensor_slices(mris).batch(batch_size)
+-        f0s = model.predict(ds_test, verbose=1).squeeze() * scaler[1] + scaler[0]
++        f0s = _predict(model, mris, batch_size).squeeze() * scaler[1] + scaler[0]
+         np.save(os.path.join(out_dir_path, file_name + '_pred.npy'), f0s)
+diff --git a/models.py b/models.py
+index 14d3c12..650b4a7 100644
+--- a/models.py
++++ b/models.py
+@@ -1,52 +1,163 @@
+-import tensorflow as tf
+-import tensorflow_addons as tfa
++import math
+ 
++import timm
++import torch
++import torch.nn as nn
++import torch.nn.functional as F
++from adabelief_pytorch import AdaBelief
+ 
+-def cnn_lstm_model(ref_frames, mri_height, mri_width, mri_channels, n_mels, print_summary=True):
+-    cnn_model = tf.keras.applications.efficientnet_v2.EfficientNetV2B2(
+-        input_shape=(mri_height, mri_width, mri_channels), include_top=False, weights=None, pooling='avg')
+ 
+-    inputs = tf.keras.Input(shape=(ref_frames, mri_height, mri_width, mri_channels))
+-    x = tf.keras.layers.TimeDistributed(cnn_model)(inputs)
+-    x = tf.keras.layers.Bidirectional(tf.keras.layers.RNN(tfa.rnn.PeepholeLSTMCell(640)), merge_mode='sum')(x)
+-    x = tf.keras.layers.Dropout(0.5)(x)
+-    outputs = tf.keras.layers.Dense(n_mels)(x)
++def _glorot_uniform_vector(units):
++    # Keras VarianceScaling (glorot_uniform) treats a 1D shape as fan_in == fan_out == units.
++    limit = math.sqrt(6.0 / (units + units))
++    return nn.Parameter(torch.empty(units).uniform_(-limit, limit))
++
++
++class PeepholeLSTMCell(nn.Module):
++    """Equivalent to tfa.rnn.PeepholeLSTMCell (Sak et al., 2014 peephole LSTM)."""
++
++    def __init__(self, input_size, units):
++        super().__init__()
++        self.units = units
++        self.kernel = nn.Parameter(torch.empty(input_size, units * 4))
++        self.recurrent_kernel = nn.Parameter(torch.empty(units, units * 4))
++        self.bias = nn.Parameter(torch.zeros(units * 4))
++        self.input_gate_peephole_weights = _glorot_uniform_vector(units)
++        self.forget_gate_peephole_weights = _glorot_uniform_vector(units)
++        self.output_gate_peephole_weights = _glorot_uniform_vector(units)
++        self.reset_parameters()
++
++    def reset_parameters(self):
++        nn.init.xavier_uniform_(self.kernel)
++        nn.init.orthogonal_(self.recurrent_kernel)
++        with torch.no_grad():
++            self.bias.zero_()
++            self.bias[self.units:self.units * 2].fill_(1.0)  # unit_forget_bias
++
++    def forward(self, x, h_prev, c_prev):
++        z = x @ self.kernel + h_prev @ self.recurrent_kernel + self.bias
++        z_i, z_f, z_c, z_o = z.split(self.units, dim=-1)
++        i = torch.sigmoid(z_i + self.input_gate_peephole_weights * c_prev)
++        f = torch.sigmoid(z_f + self.forget_gate_peephole_weights * c_prev)
++        c = f * c_prev + i * torch.tanh(z_c)
++        o = torch.sigmoid(z_o + self.output_gate_peephole_weights * c)
++        h = o * torch.tanh(c)
++        return h, c
++
++
++class BidirectionalPeepholeLSTM(nn.Module):
++    """Equivalent to Bidirectional(RNN(PeepholeLSTMCell(units)), merge_mode='sum')."""
++
++    def __init__(self, input_size, units):
++        super().__init__()
++        self.units = units
++        self.forward_cell = PeepholeLSTMCell(input_size, units)
++        self.backward_cell = PeepholeLSTMCell(input_size, units)
++
++    def forward(self, x):  # x: [B, T, input_size]
++        batch_size, seq_len, _ = x.shape
++        h_f = x.new_zeros(batch_size, self.units)
++        c_f = x.new_zeros(batch_size, self.units)
++        for t in range(seq_len):
++            h_f, c_f = self.forward_cell(x[:, t], h_f, c_f)
++        h_b = x.new_zeros(batch_size, self.units)
++        c_b = x.new_zeros(batch_size, self.units)
++        for t in reversed(range(seq_len)):
++            h_b, c_b = self.backward_cell(x[:, t], h_b, c_b)
++        return h_f + h_b
++
++
++def _make_cnn_backbone(mri_channels):
++    # tf_efficientnetv2_b2: structural port of Keras/TF EfficientNetV2B2, weights=None (random init).
++    return timm.create_model('tf_efficientnetv2_b2', pretrained=False, in_chans=mri_channels,
++                             num_classes=0, global_pool='avg')
++
+ 
+-    model = tf.keras.Model(inputs=inputs, outputs=outputs)
++class CnnLstmModel(nn.Module):
++    def __init__(self, ref_frames, mri_height, mri_width, mri_channels, n_mels):
++        super().__init__()
++        self.init_args = dict(ref_frames=ref_frames, mri_height=mri_height, mri_width=mri_width,
++                              mri_channels=mri_channels, n_mels=n_mels)
++        self.units = 640
++        self.cnn = _make_cnn_backbone(mri_channels)
++        self.rnn = BidirectionalPeepholeLSTM(self.cnn.num_features, self.units)
++        self.dropout = nn.Dropout(0.5)
++        self.dense = nn.Linear(self.units, n_mels)
++        nn.init.xavier_uniform_(self.dense.weight)
++        nn.init.zeros_(self.dense.bias)
++
++    def forward(self, x):  # x: [B, T, C, H, W]
++        batch_size, seq_len = x.shape[0], x.shape[1]
++        feats = self.cnn(x.reshape(batch_size * seq_len, *x.shape[2:]))
++        feats = feats.reshape(batch_size, seq_len, -1)
++        h = self.rnn(feats)
++        h = self.dropout(h)
++        return self.dense(h)
++
++
++class CnnFcModel(nn.Module):
++    def __init__(self, mri_height, mri_width, mri_channels):
++        super().__init__()
++        self.init_args = dict(mri_height=mri_height, mri_width=mri_width, mri_channels=mri_channels)
++        self.cnn = _make_cnn_backbone(mri_channels)
++        for p in self.cnn.parameters():
++            p.requires_grad = False
++        feat_dim = self.cnn.num_features
++        self.dropout1 = nn.Dropout(0.2)
++        self.fc1 = nn.Linear(feat_dim, 640)
++        self.bn1 = nn.BatchNorm1d(640, eps=1e-3, momentum=0.01)  # keras momentum=0.99 -> pytorch 1-0.99
++        self.dropout2 = nn.Dropout(0.1)
++        self.fc2 = nn.Linear(640, 64)
++        self.bn2 = nn.BatchNorm1d(64, eps=1e-3, momentum=0.01)
++        self.fc3 = nn.Linear(64, 1)
++        nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='relu')
++        nn.init.zeros_(self.fc1.bias)
++        nn.init.kaiming_normal_(self.fc2.weight, nonlinearity='relu')
++        nn.init.zeros_(self.fc2.bias)
++        nn.init.xavier_uniform_(self.fc3.weight)
++        nn.init.zeros_(self.fc3.bias)
++
++    def train(self, mode=True):
++        super().train(mode)
++        self.cnn.eval()  # frozen backbone: keeps BatchNorm running stats fixed, like Keras trainable=False
++        return self
++
++    def forward(self, x):  # x: [B, C, H, W]
++        with torch.no_grad():
++            feats = self.cnn(x)
++        x = self.dropout1(feats)
++        x = F.silu(self.bn1(self.fc1(x)))
++        x = self.dropout2(x)
++        x = F.silu(self.bn2(self.fc2(x)))
++        return self.fc3(x)
++
++
++def cnn_lstm_model(ref_frames, mri_height, mri_width, mri_channels, n_mels, print_summary=True):
++    model = CnnLstmModel(ref_frames, mri_height, mri_width, mri_channels, n_mels)
+     if print_summary:
+-        model.summary()
+-    model.compile(
+-        optimizer=tfa.optimizers.AdaBelief(),
+-        loss=tf.keras.losses.MeanSquaredError()
+-    )
++        print(model)
++        print('Total params:', sum(p.numel() for p in model.parameters()))
+     return model
+ 
+ 
+ def cnn_fc_model(trained_model_path, mri_height, mri_width, mri_channels, print_summary=True):
+-    cnn_model = tf.keras.applications.efficientnet_v2.EfficientNetV2B2(
+-        input_shape=(mri_height, mri_width, mri_channels), include_top=False, weights=None, pooling='avg')
+-    with tf.device('/CPU:0'):
+-        trained_model = tf.keras.models.load_model(trained_model_path)
+-    cnn_model.set_weights(trained_model.layers[1].layer.get_weights())
+-    cnn_model.trainable = False
+-
+-    inputs = tf.keras.Input(shape=(mri_height, mri_width, mri_channels))
+-    x = cnn_model(inputs)
+-    x = tf.keras.layers.Dropout(0.2)(x)
+-    x = tf.keras.layers.Dense(640, kernel_initializer='he_normal')(x)
+-    x = tf.keras.layers.BatchNormalization()(x)
+-    x = tf.keras.layers.Activation(tf.keras.activations.swish)(x)
+-    x = tf.keras.layers.Dropout(0.1)(x)
+-    x = tf.keras.layers.Dense(64, kernel_initializer='he_normal')(x)
+-    x = tf.keras.layers.BatchNormalization()(x)
+-    x = tf.keras.layers.Activation(tf.keras.activations.swish)(x)
+-    outputs = tf.keras.layers.Dense(1)(x)
+-
+-    model = tf.keras.Model(inputs=inputs, outputs=outputs)
++    checkpoint = torch.load(trained_model_path, map_location='cpu')
++    trained = CnnLstmModel(**checkpoint['init_args'])
++    trained.load_state_dict(checkpoint['state_dict'])
++
++    model = CnnFcModel(mri_height, mri_width, mri_channels)
++    model.cnn.load_state_dict(trained.cnn.state_dict())
++    for p in model.cnn.parameters():
++        p.requires_grad = False
++
+     if print_summary:
+-        model.summary()
+-    model.compile(
+-        optimizer=tfa.optimizers.AdaBelief(),
+-        loss=tf.keras.losses.MeanSquaredError()
+-    )
++        print(model)
++        print('Total params:', sum(p.numel() for p in model.parameters()))
+     return model
++
++
++def make_optimizer(model):
++    # Equivalent to tfa.optimizers.AdaBelief() defaults (rectify=True, amsgrad=False, weight_decay=0).
++    return AdaBelief(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-14,
++                     weight_decay=0, weight_decouple=False, rectify=True, amsgrad=False,
++                     print_change_log=False)
+diff --git a/requirements.txt b/requirements.txt
+index 701cfde..0b1f02b 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,6 +1,8 @@
+ librosa~=0.9.2
+ numpy~=1.22.2
+ soxr~=0.3.4
+-tensorflow~=2.11.0
++torch~=2.8.0
++timm~=1.0.31
++adabelief-pytorch~=0.2.1
+ pillow~=9.3.0
+ scipy~=1.6.3
+\ No newline at end of file
+diff --git a/train.py b/train.py
+index 6b50127..8a3d6cf 100644
+--- a/train.py
++++ b/train.py
+@@ -1,85 +1,141 @@
++import copy
+ import os
++import pickle
+ 
+ import numpy as np
+-import tensorflow as tf
++import torch
+ from PIL import Image
++from torch.utils.data import DataLoader, Dataset
+ 
+-from models import cnn_lstm_model, cnn_fc_model
++from models import cnn_lstm_model, cnn_fc_model, make_optimizer
+ 
+-_mri_dir = None
+-_temp_dir_path = None
++_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+ 
+-_mri_height = None
+-_mri_width = None
+-_mri_channels = None
+ 
++class _SpeechDataset(Dataset):
++    def __init__(self, records, mri_dir, temp_dir_path):
++        self.records = records
++        self.mri_dir = mri_dir
++        self.temp_dir_path = temp_dir_path
++        self._wav_cache = {}
+ 
+-def tf_parse_sub(ns, ps):
+-    mris, wavs = [], []
+-    for n, p in zip([n.decode() for n in ns], ps):
+-        mri = []
+-        for i in range(p[0], p[1]):
+-            mri.append(np.array(Image.open(os.path.join(_mri_dir, n, f'{n}_{i:04}.png')))[..., None].astype(np.float32)
+-                       / 65535.0 * 255.0)
+-        mris.append(mri)
+-        wavs.append(np.load(os.path.join(_temp_dir_path, f'{n}.npy'))[p[2]])
+-    return np.stack(mris), np.stack(wavs)
++    def __len__(self):
++        return len(self.records)
+ 
++    def _load_wav(self, n):
++        if n not in self._wav_cache:
++            self._wav_cache[n] = np.load(os.path.join(self.temp_dir_path, f'{n}.npy'))
++        return self._wav_cache[n]
+ 
+-def tf_parse(example):
+-    features = tf.io.parse_example(example, features={
+-        'n': tf.io.FixedLenFeature([], tf.string),
+-        'p': tf.io.FixedLenFeature([3], tf.int64)
+-    })
+-    return tf.numpy_function(tf_parse_sub, [features['n'], features['p']], [tf.float32, tf.float32])
++    def __getitem__(self, idx):
++        n, p0, p1, p2 = self.records[idx]
++        mri = []
++        for i in range(p0, p1):
++            img = np.array(Image.open(os.path.join(self.mri_dir, n, f'{n}_{i:04}.png')))[None].astype(np.float32) \
++                / 65535.0 * 255.0
++            mri.append(img)
++        mri = np.stack(mri)  # [T, C, H, W]
++        wav = self._load_wav(n)[p2]
++        return torch.from_numpy(mri), torch.from_numpy(wav.astype(np.float32))
++
++
++class _F0Dataset(Dataset):
++    def __init__(self, records, mri_dir, mri_height, mri_width, mri_channels):
++        self.records = records
++        self.mri_dir = mri_dir
++        self.mri_height, self.mri_width, self.mri_channels = mri_height, mri_width, mri_channels
++
++    def __len__(self):
++        return len(self.records)
++
++    def __getitem__(self, idx):
++        n, p, f = self.records[idx]
++        img = np.array(Image.open(os.path.join(self.mri_dir, n, f'{n}_{p:04}.png'))).reshape(
++            (self.mri_height, self.mri_width, self.mri_channels)).astype(np.float32) / 65535.0 * 255.0
++        img = img.transpose(2, 0, 1)  # [C, H, W]
++        return torch.from_numpy(img), torch.tensor(f, dtype=torch.float32)
++
++
++def _load_records(temp_dir_path, filename):
++    with open(os.path.join(temp_dir_path, f'{filename}.pkl'), 'rb') as file:
++        return pickle.load(file)
++
++
++def _fit(model, ds_train, ds_valid, py_dir_path, batch_size, max_epochs, patience):
++    model.to(_device)
++    optimizer = make_optimizer(model)
++    loss_fn = torch.nn.MSELoss()
++    loader_train = DataLoader(ds_train, batch_size=batch_size, shuffle=True)
++    loader_valid = DataLoader(ds_valid, batch_size=batch_size, shuffle=False)
++    ckpt_dir = os.path.join(py_dir_path, 'ckpt')
++    os.makedirs(ckpt_dir, exist_ok=True)
++
++    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
++        optimizer, mode='min', factor=0.1, patience=patience // 2)
++
++    best_loss = float('inf')
++    best_state = None
++    wait = 0
++    for epoch in range(1, max_epochs + 1):
++        model.train()
++        for x, y in loader_train:
++            x, y = x.to(_device), y.to(_device)
++            optimizer.zero_grad()
++            pred = model(x)
++            if pred.dim() == y.dim() + 1 and pred.shape[-1] == 1:
++                pred = pred.squeeze(-1)
++            loss = loss_fn(pred, y)
++            loss.backward()
++            optimizer.step()
++
++        model.eval()
++        val_loss_sum, val_count = 0.0, 0
++        with torch.no_grad():
++            for x, y in loader_valid:
++                x, y = x.to(_device), y.to(_device)
++                pred = model(x)
++                if pred.dim() == y.dim() + 1 and pred.shape[-1] == 1:
++                    pred = pred.squeeze(-1)
++                loss = loss_fn(pred, y)
++                val_loss_sum += loss.item() * x.shape[0]
++                val_count += x.shape[0]
++        val_loss = val_loss_sum / val_count
++        print(f'Epoch {epoch}/{max_epochs} - val_loss: {val_loss:.6f}')
++
++        torch.save({'model_class': type(model).__name__, 'init_args': model.init_args,
++                   'state_dict': model.state_dict()},
++                  os.path.join(ckpt_dir, f'weights_epoch_{epoch:02}.pt'))
++
++        prev_lr = optimizer.param_groups[0]['lr']
++        scheduler.step(val_loss)
++        new_lr = optimizer.param_groups[0]['lr']
++        if new_lr != prev_lr:
++            print(f'Epoch {epoch}: ReduceLROnPlateau reducing learning rate to {new_lr}.')
++
++        if val_loss < best_loss:
++            best_loss, wait = val_loss, 0
++            best_state = copy.deepcopy(model.state_dict())
++        else:
++            wait += 1
++            if wait >= patience:
++                print(f'Epoch {epoch}: early stopping')
++                break
++
++    if best_state is not None:
++        model.load_state_dict(best_state)
++    return model
+ 
+ 
+ def train_model(mri_dir, temp_dir_path, py_dir_path, ref_frames, mri_size, n_mels, batch_size, max_epochs, patience):
+-    global _mri_dir, _temp_dir_path
+-    _mri_dir, _temp_dir_path = mri_dir, temp_dir_path
+     model = cnn_lstm_model(ref_frames, *mri_size, n_mels)
+-    ds_train = tf.data.TFRecordDataset([os.path.join(temp_dir_path, 'train.tfrecord')])
+-    ds_train = ds_train.shuffle(len(list(ds_train))).batch(batch_size).map(tf_parse).prefetch(tf.data.AUTOTUNE)
+-    ds_valid = tf.data.TFRecordDataset([os.path.join(temp_dir_path, 'valid.tfrecord')]
+-                                       ).batch(batch_size).map(tf_parse).prefetch(tf.data.AUTOTUNE)
+-    cp_path = os.path.join(py_dir_path, 'ckpt', 'weights_epoch_{epoch:02d}.h5')
+-    model.fit(ds_train, validation_data=ds_valid, epochs=max_epochs,
+-              callbacks=[tf.keras.callbacks.ModelCheckpoint(cp_path),
+-                         tf.keras.callbacks.ReduceLROnPlateau(patience=patience // 2, verbose=1),
+-                         tf.keras.callbacks.EarlyStopping(patience=patience, verbose=1, restore_best_weights=True)])
+-    return model
+-
+-
+-def tf_parse_sub_f0(ns, ps, fs):
+-    mris = []
+-    for n, p in zip([n.decode() for n in ns], ps):
+-        mris.append(np.array(Image.open(os.path.join(_mri_dir, n, f'{n}_{p:04}.png')))
+-                    .reshape((_mri_height, _mri_width, _mri_channels)).astype(np.float32) / 65535.0 * 255.0)
+-    return np.stack(mris), fs
+-
+-
+-def tf_parse_f0(example):
+-    features = tf.io.parse_example(example, features={
+-        'n': tf.io.FixedLenFeature([], tf.string),
+-        'p': tf.io.FixedLenFeature([], tf.int64),
+-        'f': tf.io.FixedLenFeature([], tf.float32)
+-    })
+-    return tf.numpy_function(tf_parse_sub_f0, [features['n'], features['p'], features['f']], [tf.float32, tf.float32])
++    ds_train = _SpeechDataset(_load_records(temp_dir_path, 'train'), mri_dir, temp_dir_path)
++    ds_valid = _SpeechDataset(_load_records(temp_dir_path, 'valid'), mri_dir, temp_dir_path)
++    return _fit(model, ds_train, ds_valid, py_dir_path, batch_size, max_epochs, patience)
+ 
+ 
+ def train_model_f0(mri_dir, temp_dir_path, py_dir_path, trained_model_path, mri_height, mri_width, mri_channels,
+                    batch_size, max_epochs, patience):
+-    global _mri_dir, _mri_height, _mri_width, _mri_channels
+-    _mri_dir = mri_dir
+-    _mri_height, _mri_width, _mri_channels = mri_height, mri_width, mri_channels
+     model = cnn_fc_model(trained_model_path, mri_height, mri_width, mri_channels)
+-    ds_train = tf.data.TFRecordDataset([os.path.join(temp_dir_path, 'train.tfrecord')])
+-    ds_train = ds_train.shuffle(len(list(ds_train))).batch(batch_size).map(tf_parse_f0).prefetch(tf.data.AUTOTUNE)
+-    ds_valid = tf.data.TFRecordDataset([os.path.join(temp_dir_path, 'valid.tfrecord')]
+-                                       ).batch(batch_size).map(tf_parse_f0).prefetch(tf.data.AUTOTUNE)
+-    cp_path = os.path.join(py_dir_path, 'ckpt', 'weights_epoch_{epoch:02d}.h5')
+-    model.fit(ds_train, validation_data=ds_valid, epochs=max_epochs,
+-              callbacks=[tf.keras.callbacks.ModelCheckpoint(cp_path),
+-                         tf.keras.callbacks.ReduceLROnPlateau(patience=patience // 2, verbose=1),
+-                         tf.keras.callbacks.EarlyStopping(patience=patience, verbose=1, restore_best_weights=True)])
+-    return model
++    ds_train = _F0Dataset(_load_records(temp_dir_path, 'train'), mri_dir, mri_height, mri_width, mri_channels)
++    ds_valid = _F0Dataset(_load_records(temp_dir_path, 'valid'), mri_dir, mri_height, mri_width, mri_channels)
++    return _fit(model, ds_train, ds_valid, py_dir_path, batch_size, max_epochs, patience)
+diff --git a/utils/models.py b/utils/models.py
+index fe0d0ac..f936634 100644
+--- a/utils/models.py
++++ b/utils/models.py
+@@ -3,12 +3,16 @@ import os
+ import pickle
+ from datetime import datetime
+ 
+-import tensorflow as tf
++import torch
++
++from models import CnnLstmModel, CnnFcModel
++
++_MODEL_CLASSES = {'CnnLstmModel': CnnLstmModel, 'CnnFcModel': CnnFcModel}
+ 
+ 
+ def select_model(py_dir_path, models_dirname='models'):
+     model_path = None
+-    paths = glob.glob(os.path.join(py_dir_path, models_dirname, '*.h5'))
++    paths = glob.glob(os.path.join(py_dir_path, models_dirname, '*.pt'))
+     if paths:
+         for num, path in enumerate(paths):
+             print(str(num + 1) + ':', path)
+@@ -19,9 +23,11 @@ def select_model(py_dir_path, models_dirname='models'):
+ 
+ 
+ def load_model(model_path, num_items, print_summary=True):
+-    model = tf.keras.models.load_model(model_path)
++    checkpoint = torch.load(model_path, map_location='cpu')
++    model = _MODEL_CLASSES[checkpoint['model_class']](**checkpoint['init_args'])
++    model.load_state_dict(checkpoint['state_dict'])
+     if print_summary:
+-        model.summary()
++        print(model)
+     with open(os.path.splitext(model_path)[0] + '.joblib', 'rb') as file:
+         others = []
+         for _ in range(num_items):
+@@ -33,7 +39,8 @@ def save_model(py_dir_path, model, others, models_dirname='models'):
+     model_dir_path = os.path.join(py_dir_path, models_dirname)
+     os.makedirs(model_dir_path, exist_ok=True)
+     file_name = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+-    model.save(os.path.join(model_dir_path, file_name + '.h5'))
++    torch.save({'model_class': type(model).__name__, 'init_args': model.init_args,
++               'state_dict': model.state_dict()}, os.path.join(model_dir_path, file_name + '.pt'))
+     with open(os.path.join(model_dir_path, file_name + '.joblib'), 'wb') as file:
+         for other in others:
+             pickle.dump(other, file, pickle.HIGHEST_PROTOCOL)
