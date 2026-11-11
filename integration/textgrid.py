@@ -85,6 +85,38 @@ def load_textgrid(filename):
     return tiers
 
 
+def write_textgrid(path, tiers, xmin=0.0, xmax=None):
+    """Tierのリストから最小限のTextGrid形式(UTF-16)で書き出す。class_ipa.py/IPA.read_textgrid()
+    と同じ "item [N]:" / "text = " / "xmin = " / "xmax = " の並びのみを解釈できればよいため、
+    フルスペックのPraat形式ではないが、既存の読み込みコードと互換性を保つ。"""
+    if xmax is None:
+        xmax = max(t.xmax for t in tiers)
+    lines = []
+    lines.append('File type = "ooTextFile"')
+    lines.append('Object class = "TextGrid"')
+    lines.append("")
+    lines.append(f"xmin = {xmin} ")
+    lines.append(f"xmax = {xmax} ")
+    lines.append("tiers? <exists> ")
+    lines.append(f"size = {len(tiers)} ")
+    lines.append("item []: ")
+    for ti, tier in enumerate(tiers):
+        lines.append(f"    item [{ti + 1}]:")
+        lines.append('        class = "IntervalTier" ')
+        lines.append(f'        name = "{tier.name}" ')
+        lines.append(f"        xmin = {tier.xmin} ")
+        lines.append(f"        xmax = {tier.xmax} ")
+        lines.append(f"        intervals: size = {len(tier.intervals)} ")
+        for ii, iv in enumerate(tier.intervals):
+            lines.append(f"        intervals [{ii + 1}]:")
+            lines.append(f"            xmin = {iv.xmin} ")
+            lines.append(f"            xmax = {iv.xmax} ")
+            lines.append(f'            text = "{iv.text}" ')
+    text = "\n".join(lines) + "\n"
+    with open(path, "wb") as f:
+        f.write(text.encode("utf-16"))
+
+
 def write_lab(path, intervals):
     """(xmin, xmax, text) の並びを `start end text` 形式で書き出す。"""
     with codecs.open(path, "w", "utf-8") as f:

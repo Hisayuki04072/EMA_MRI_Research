@@ -40,7 +40,8 @@
 |---|---|---|---|
 | **s47 (正解音声の候補・最重要)** | `/home/hisayuki/Research/EMA_Research/s47/by_sentence/<文ID>/` | **文単位でEMA・MRI(PNG)・音声(s47版/F1版 両方)・TextGrid が揃っている**。`<id>.ema`、`<id>_s47.WAV`、`<id>_F1.WAV`、`<id>.TextGrid`、`png/<id>_NNNN.png` | ATR503全503文、全モダリティ揃い。合計14GB |
 | 同上・トップレベル展開版 | `s47/{WAV,text,ema,PNG,MP4,WAV_normalized,MP4_normalized}/` | by_sentence と同内容をモダリティ別に展開したもの(重複) | 各503件 |
-| EMA生データ(複数セッション) | `/home/hisayuki/Research/EMA_Research/Dataset/{20180911_atr503(_old),20181115_atr503,20200220_atr503}` | ATR503のEMA+wav+TextGrid。セッション別。s47は`20200220`由来と推測(ema内のファイル名が`202002202xxxx`で一致) | 各セッション503件、339〜505MB |
+| EMA生データ(複数セッション) | `/home/hisayuki/Research/EMA_Research/Dataset/{20180911_atr503(_old),20181115_atr503,20200220_atr503}` | ATR503のEMA+wav+TextGrid。セッション別 | 各セッション503件、339〜505MB |
+  - **訂正(2026-11-11)**: `s47/by_sentence/<id>.ema` はチェックサム比較の結果、上記いずれのDatasetセッションとも一致しないことが判明(当初「20200220由来」と推測したが誤り)。`s47/ema`(トップレベル)は20200220セッションと完全一致するが、`by_sentence`内の`.ema`(F1音声とペア)は独自データで厳密な由来は不明。学習方針への影響はない(by_sentence内のデータをそのまま使う方針は変わらず)。
 | JVSコーパス | `Dataset/JVS` | HiFi-GANボコーダの事前学習用(日本語マルチスピーカー) | 8.5GB |
 | shuushiの前処理済み特徴 | `shuushi/Dataset`, `shuushi/00_Dataset` | 上記EMA生データ(20180911_atr503_old)から生成したcut_sil_ema・F0・MEL・ENERGY等 | 503件 |
 | **Research/research/Dataset/realTimeMRI_ATR503** | 同ディレクトリ | ATR503生音声+テキスト(`ATR503_kana.txt`)と、`preprocessed/Maekawa/` に前処理済みMRIフレーム(`<id>_frame.npy`, 64×64×3)・メル・音素列 | 503件、3.8GB |
