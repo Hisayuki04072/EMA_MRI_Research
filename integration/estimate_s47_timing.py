@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from textgrid import load_textgrid, Interval, write_lab
 
 S47_ROOT = "/workspace/s47/by_sentence"
+NORMALIZED_TEXT_DIR = "/workspace/EMA_MRI_Research/shuushi/Dataset_s47/text"
 PHONETIC_TIER_IDX = 1  # item[2] (0-indexed) = "phonetic"
 
 DTW_SR = 16000
@@ -56,7 +57,7 @@ def build_f1_to_s47_mapper(f1_wav, s47_wav):
 
 def process_sentence(sent_id, verbose=False):
     sent_dir = os.path.join(S47_ROOT, sent_id)
-    tg_path = os.path.join(sent_dir, f"{sent_id}.TextGrid")
+    tg_path = os.path.join(NORMALIZED_TEXT_DIR, f"{sent_id}.TextGrid")  # 正規化済み(shuushiのipa_dictと一致)
     f1_wav = os.path.join(sent_dir, f"{sent_id}_F1.WAV")
     s47_wav = os.path.join(sent_dir, f"{sent_id}_s47.WAV")
     out_path = os.path.join(sent_dir, f"{sent_id}_s47_timing.lab")
