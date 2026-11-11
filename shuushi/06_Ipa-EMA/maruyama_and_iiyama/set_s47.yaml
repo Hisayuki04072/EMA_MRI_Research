@@ -1,0 +1,14 @@
+dataset:
+  text_dataset: "../../Dataset_s47/text"
+  ema_dataset:  "../../Dataset_s47/ema"
+  train_txt: "../../Dataset_s47/set_textgrid/train.txt"
+  test_txt:  "../../Dataset_s47/set_textgrid/test.txt"
+  valid_txt: "../../Dataset_s47/set_textgrid/valid.txt"
+
+out_dir: "out_s47"
+
+pad: True
+normalize: "stand"
+epoch_num: 3000
+batch_size: 1
+ResNet: True

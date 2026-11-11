@@ -1,0 +1,7 @@
+dataset:
+  jvs_wav_dataset : "../../Dataset_s47/cut_sil_wav"
+out:
+  out_jvs_F0 : "../../Dataset_s47/F0"
+
+hop_size : 64
+wav_sr : 16000

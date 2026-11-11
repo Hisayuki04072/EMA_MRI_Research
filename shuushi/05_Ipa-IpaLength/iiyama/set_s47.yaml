@@ -1,0 +1,10 @@
+dataset:
+  text_dataset: "../../Dataset_s47/text"
+  train_txt: "../../Dataset_s47/set_textgrid/train.txt"
+  test_txt: "../../Dataset_s47/set_textgrid/test.txt"
+  valid_txt: "../../Dataset_s47/set_textgrid/valid.txt"
+
+out_dir: "out_s47"
+window_size: 19
+epoch_num: 150
+separate: True

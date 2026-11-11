@@ -1,0 +1,16 @@
+dataset:
+  ema_wav_dataset : "../../Dataset_s47/cut_sil_wav"
+  ema_dataset : "../../Dataset_s47/cut_sil_ema"
+out:
+  out_mel : "../../Dataset_s47/MEL"
+  out_energy :  "../../Dataset_s47/ENERGY"
+
+num_mels: 60
+n_fft: 512
+hop_size: 64
+win_size: 512
+
+sampling_rate: 16000
+
+fmin: 0
+fmax: 8000

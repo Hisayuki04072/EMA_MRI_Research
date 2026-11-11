@@ -1,0 +1,35 @@
+dataset:
+  ema_dataset:  "../Dataset_s47/cut_sil_ema"
+  f0_dataset : "../Dataset_s47/F0"
+  mel_dataset : "../Dataset_s47/MEL"
+  ipa_dataset: "../Dataset_s47/text"
+  energy_dataset  : "../Dataset_s47/ENERGY"
+  train_txt: "../Dataset_s47/set_textgrid/train.txt"
+  test_txt:  "../Dataset_s47/set_textgrid/test.txt"
+  valid_txt: "../Dataset_s47/set_textgrid/valid.txt"
+  atr_503_txt : "../Dataset_s47/atr_503_s47.txt"
+
+
+num_mel : 60
+
+
+batch_size : 16
+lr : 0.0002
+lr_decay: 0.999
+
+
+
+out_dir: "out_s47"
+mode : ["IPA","EMA"]
+
+
+valid_name : "j"
+epoch_num: 2001
+validation_interval: 10
+checkpoint_interval: 1000
+
+
+
+model_basename: "model_ep2000.pth"
+model_read: False
+test_only: False
